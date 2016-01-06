@@ -42,7 +42,7 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
         {
             get
             {
-                return Equals(_awaitableState, _awaitableIsCompleted);
+                return ReferenceEquals(_awaitableState, _awaitableIsCompleted);
             }
         }
 
@@ -127,8 +127,8 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
                 _manualResetEvent.Set();
             }
 
-            if (awaitableState != _awaitableIsCompleted &&
-                awaitableState != _awaitableIsNotCompleted)
+            if (!ReferenceEquals(awaitableState, _awaitableIsCompleted) &&
+                !ReferenceEquals(awaitableState, _awaitableIsNotCompleted))
             {
                 _threadPool.Run(awaitableState);
             }
@@ -188,8 +188,9 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
 
             _manualResetEvent.Set();
 
-            if (awaitableState != _awaitableIsCompleted &&
-                awaitableState != _awaitableIsNotCompleted)
+            
+            if (!ReferenceEquals(awaitableState, _awaitableIsCompleted) &&
+                !ReferenceEquals(awaitableState, _awaitableIsNotCompleted))
             {
                 _threadPool.Run(awaitableState);
             }
@@ -207,11 +208,11 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
                 continuation,
                 _awaitableIsNotCompleted);
 
-            if (awaitableState == _awaitableIsNotCompleted)
+            if (ReferenceEquals(awaitableState, _awaitableIsNotCompleted))
             {
                 return;
             }
-            else if (awaitableState == _awaitableIsCompleted)
+            else if (ReferenceEquals(awaitableState, _awaitableIsCompleted))
             {
                 _threadPool.Run(continuation);
             }
