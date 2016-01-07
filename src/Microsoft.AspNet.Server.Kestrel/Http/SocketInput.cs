@@ -25,6 +25,8 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
         private MemoryPoolBlock2 _tail;
         private MemoryPoolBlock2 _pinned;
 
+        private int _consumingState;
+
         public SocketInput(MemoryPool2 memory, IThreadPool threadPool)
         {
             _memory = memory;
@@ -81,10 +83,8 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
 
         public void IncomingComplete(int count, Exception error)
         {
-            // Unpin may called without an earlier Pin 
             if (_pinned != null)
             {
-
                 _pinned.End += count;
 
                 if (_head == null)
@@ -133,6 +133,11 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
 
         public MemoryPoolIterator2 ConsumingStart()
         {
+            if (Interlocked.CompareExchange(ref _consumingState, 1, 0) != 0)
+            {
+                throw new InvalidOperationException($"{nameof(ConsumingStart)} was called twice without a call to {nameof(ConsumingComplete)}.");
+            }
+
             return new MemoryPoolIterator2(_head);
         }
 
@@ -142,6 +147,7 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
         {
             MemoryPoolBlock2 returnStart = null;
             MemoryPoolBlock2 returnEnd = null;
+
             if (!consumed.IsDefault)
             {
                 returnStart = _head;
@@ -149,6 +155,7 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
                 _head = consumed.Block;
                 _head.Start = consumed.Index;
             }
+
             if (!examined.IsDefault &&
                 examined.IsEnd &&
                 RemoteIntakeFin == false &&
@@ -167,6 +174,11 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
                 var returnBlock = returnStart;
                 returnStart = returnStart.Next;
                 returnBlock.Pool.Return(returnBlock);
+            }
+
+            if (Interlocked.CompareExchange(ref _consumingState, 0, 1) != 1)
+            {
+                throw new InvalidOperationException($"{nameof(ConsumingComplete)} has already been called.");
             }
         }
 
