@@ -21,7 +21,6 @@ namespace Microsoft.AspNet.Server.KestrelTests
             _logger = engine.Log;
         }
 
-        [Fact(Skip = "Waiting for adding support for multi loop in libuv")]
         public void InitAndCloseServerPipe()
         {
             var loop = new UvLoopHandle(_logger);
@@ -39,7 +38,6 @@ namespace Microsoft.AspNet.Server.KestrelTests
 
         }
 
-        [Fact(Skip = "Waiting for adding support for multi loop in libuv")]
         public void ServerPipeListenForConnections()
         {
             var loop = new UvLoopHandle(_logger);
@@ -64,14 +62,24 @@ namespace Microsoft.AspNet.Server.KestrelTests
 
                 var writeRequest = new UvWriteReq(new KestrelTrace(new TestKestrelTrace()));
                 writeRequest.Init(loop);
+                var block = MemoryPoolBlock2.Create(
+                    new ArraySegment<byte>(new byte[] { 1, 2, 3, 4 }),
+                    dataPtr: IntPtr.Zero,
+                    pool: null,
+                    slab: null);
+                var start = new MemoryPoolIterator2(block, 0);
+                var end = new MemoryPoolIterator2(block, block.Data.Count);
                 writeRequest.Write(
                     serverConnectionPipe,
-                    new ArraySegment<ArraySegment<byte>>(new ArraySegment<byte>[] { new ArraySegment<byte>(new byte[] { 1, 2, 3, 4 }) }),
+                    start, 
+                    end,
+                    1,
                     (_3, status2, error2, _4) =>
                     {
                         writeRequest.Dispose();
                         serverConnectionPipe.Dispose();
                         serverListenPipe.Dispose();
+                        block.Unpin();
                     },
                     null);
 
@@ -112,7 +120,6 @@ namespace Microsoft.AspNet.Server.KestrelTests
         }
 
 
-        [Fact(Skip = "Waiting for adding support for multi loop in libuv")]
         public void ServerPipeDispatchConnections()
         {
             var pipeName = @"\\.\pipe\ServerPipeDispatchConnections" + Guid.NewGuid().ToString("n");

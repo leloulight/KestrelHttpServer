@@ -2,11 +2,9 @@
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
 using System;
-using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNet.Server.Kestrel.Http;
-using Microsoft.Extensions.Primitives;
 using Xunit;
 
 namespace Microsoft.AspNet.Server.KestrelTests
@@ -20,8 +18,8 @@ namespace Microsoft.AspNet.Server.KestrelTests
         public void Http10ConnectionClose()
         {
             var input = new TestInput();
-            var body = MessageBody.For("HTTP/1.0", new Dictionary<string, StringValues>(), input.FrameContext);
-            var stream = new FrameRequestStream(body);
+            var body = MessageBody.For("HTTP/1.0", new FrameRequestHeaders(), input.FrameContext);
+            var stream = new FrameRequestStream().StartAcceptingReads(body);
 
             input.Add("Hello", true);
 
@@ -38,8 +36,8 @@ namespace Microsoft.AspNet.Server.KestrelTests
         public async Task Http10ConnectionCloseAsync()
         {
             var input = new TestInput();
-            var body = MessageBody.For("HTTP/1.0", new Dictionary<string, StringValues>(), input.FrameContext);
-            var stream = new FrameRequestStream(body);
+            var body = MessageBody.For("HTTP/1.0", new FrameRequestHeaders(), input.FrameContext);
+            var stream = new FrameRequestStream().StartAcceptingReads(body);
 
             input.Add("Hello", true);
 
@@ -56,8 +54,8 @@ namespace Microsoft.AspNet.Server.KestrelTests
         public async Task CanHandleLargeBlocks()
         {
             var input = new TestInput();
-            var body = MessageBody.For("HTTP/1.0", new Dictionary<string, StringValues>(), input.FrameContext);
-            var stream = new FrameRequestStream(body);
+            var body = MessageBody.For("HTTP/1.0", new FrameRequestHeaders(), input.FrameContext);
+            var stream = new FrameRequestStream().StartAcceptingReads(body);
 
             // Input needs to be greater than 4032 bytes to allocate a block not backed by a slab.
             var largeInput = new string('a', 8192);

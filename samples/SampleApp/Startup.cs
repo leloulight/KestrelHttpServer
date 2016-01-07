@@ -2,18 +2,16 @@
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
 using System;
+using System.IO;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNet.Builder;
+using Microsoft.AspNet.Hosting;
 using Microsoft.AspNet.Http;
 using Microsoft.AspNet.Http.Features;
 using Microsoft.AspNet.Server.Kestrel;
-using Microsoft.Extensions.PlatformAbstractions;
+using Microsoft.AspNet.Server.Kestrel.Filter;
 using Microsoft.Extensions.Logging;
-
-#if DNX451
-using System.IO;
-using System.Security.Cryptography.X509Certificates;
-using Microsoft.AspNet.Server.Kestrel.Https;
-#endif
+using Microsoft.Extensions.PlatformAbstractions;
 
 namespace SampleApp
 {
@@ -25,11 +23,8 @@ namespace SampleApp
             //ksi.ThreadCount = 4;
             ksi.NoDelay = true;
 
-            loggerFactory.MinimumLevel = LogLevel.Debug;
+            loggerFactory.AddConsole(LogLevel.Trace);
 
-            loggerFactory.AddConsole(LogLevel.Debug);
-
-#if DNX451
             var testCertPath = Path.Combine(
                 env.ApplicationBasePath,
                 @"../../test/Microsoft.AspNet.Server.KestrelTests/TestResources/testCert.pfx");
@@ -42,7 +37,8 @@ namespace SampleApp
             {
                 Console.WriteLine("Could not find certificate at '{0}'. HTTPS is not enabled.", testCertPath);
             }
-#endif
+
+            app.UseKestrelConnectionLogging();
 
             app.Run(async context =>
             {
@@ -51,11 +47,35 @@ namespace SampleApp
                     context.Request.PathBase,
                     context.Request.Path,
                     context.Request.QueryString);
+                Console.WriteLine($"Method: {context.Request.Method}");
+                Console.WriteLine($"PathBase: {context.Request.PathBase}");
+                Console.WriteLine($"Path: {context.Request.Path}");
+                Console.WriteLine($"QueryString: {context.Request.QueryString}");
+
+                var connectionFeature = context.Connection;
+                Console.WriteLine($"Peer: {connectionFeature.RemoteIpAddress?.ToString()} {connectionFeature.RemotePort}");
+                Console.WriteLine($"Sock: {connectionFeature.LocalIpAddress?.ToString()} {connectionFeature.LocalPort}");
+                Console.WriteLine($"IsLocal: {connectionFeature.IsLocal}");
 
                 context.Response.ContentLength = 11;
                 context.Response.ContentType = "text/plain";
                 await context.Response.WriteAsync("Hello world");
             });
+        }
+
+        public static void Main(string[] args)
+        {
+            var application = new WebApplicationBuilder()
+                .UseConfiguration(WebApplicationConfiguration.GetDefault(args))
+                .UseStartup<Startup>()
+                .Build();
+
+            // The following section should be used to demo sockets
+            //var addresses = application.GetAddresses();
+            //addresses.Clear();
+            //addresses.Add("http://unix:/tmp/kestrel-test.sock");
+
+            application.Run();
         }
     }
 }

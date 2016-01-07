@@ -25,7 +25,7 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
             socket.Init(Thread.Loop, Thread.QueueCloseHandle);
             socket.NoDelay(NoDelay);
             socket.Bind(ServerAddress);
-            socket.Listen(Constants.ListenBacklog, ConnectionCallback, this);
+            socket.Listen(Constants.ListenBacklog, (stream, status, error, state) => ConnectionCallback(stream, status, error, state), this);
             return socket;
         }
 
@@ -37,20 +37,21 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
         protected override void OnConnection(UvStreamHandle listenSocket, int status)
         {
             var acceptSocket = new UvTcpHandle(Log);
-            acceptSocket.Init(Thread.Loop, Thread.QueueCloseHandle);
-            acceptSocket.NoDelay(NoDelay);
 
             try
             {
+                acceptSocket.Init(Thread.Loop, Thread.QueueCloseHandle);
+                acceptSocket.NoDelay(NoDelay);
                 listenSocket.Accept(acceptSocket);
+                DispatchConnection(acceptSocket);
+
             }
             catch (UvException ex)
             {
                 Log.LogError("TcpListener.OnConnection", ex);
+                acceptSocket.Dispose();
                 return;
             }
-
-            DispatchConnection(acceptSocket);
         }
     }
 }

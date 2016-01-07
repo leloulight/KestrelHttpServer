@@ -16,6 +16,7 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
         private static readonly Action _awaitableIsNotCompleted = () => { };
 
         private readonly MemoryPool2 _memory;
+        private readonly IThreadPool _threadPool;
         private readonly ManualResetEventSlim _manualResetEvent = new ManualResetEventSlim(false);
 
         private Action _awaitableState;
@@ -26,9 +27,10 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
         private MemoryPoolBlock2 _pinned;
         private readonly object _sync = new Object();
 
-        public SocketInput(MemoryPool2 memory)
+        public SocketInput(MemoryPool2 memory, IThreadPool threadPool)
         {
             _memory = memory;
+            _threadPool = threadPool;
             _awaitableState = _awaitableIsNotCompleted;
         }
 
@@ -64,7 +66,7 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
                 {
                     _pinned = _tail;
                     var data = new ArraySegment<byte>(_pinned.Data.Array, _pinned.End, _pinned.Data.Offset + _pinned.Data.Count - _pinned.End);
-                    var dataPtr = _pinned.Pin();
+                    var dataPtr = _pinned.Pin() + _pinned.End;
                     return new IncomingBuffer
                     {
                         Data = data,
@@ -77,7 +79,7 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
             return new IncomingBuffer
             {
                 Data = _pinned.Data,
-                DataPtr = _pinned.Pin()
+                DataPtr = _pinned.Pin() + _pinned.End
             };
         }
 
@@ -128,7 +130,7 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
             if (awaitableState != _awaitableIsCompleted &&
                 awaitableState != _awaitableIsNotCompleted)
             {
-                Task.Run(awaitableState);
+                _threadPool.Run(awaitableState);
             }
         }
 
@@ -176,6 +178,23 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
             }
         }
 
+        public void AbortAwaiting()
+        {
+            _awaitableError = new ObjectDisposedException(nameof(SocketInput), "The request was aborted");
+
+            var awaitableState = Interlocked.Exchange(
+                ref _awaitableState,
+                _awaitableIsCompleted);
+
+            _manualResetEvent.Set();
+
+            if (awaitableState != _awaitableIsCompleted &&
+                awaitableState != _awaitableIsNotCompleted)
+            {
+                _threadPool.Run(awaitableState);
+            }
+        }
+
         public SocketInput GetAwaiter()
         {
             return this;
@@ -194,11 +213,20 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
             }
             else if (awaitableState == _awaitableIsCompleted)
             {
-                Task.Run(continuation);
+                _threadPool.Run(continuation);
             }
             else
             {
-                // THIS IS AN ERROR STATE - ONLY ONE WAITER CAN WAIT
+                _awaitableError = new InvalidOperationException("Concurrent reads are not supported.");
+
+                awaitableState = Interlocked.Exchange(
+                    ref _awaitableState,
+                    _awaitableIsCompleted);
+
+                _manualResetEvent.Set();
+
+                _threadPool.Run(continuation);
+                _threadPool.Run(awaitableState);
             }
         }
 

@@ -3,16 +3,16 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Primitives;
-using System.IO;
 
 namespace Microsoft.AspNet.Server.Kestrel.Http
 {
     public abstract class MessageBody
     {
-        private FrameContext _context;
+        private readonly FrameContext _context;
         private int _send100Continue = 1;
 
         protected MessageBody(FrameContext context)
@@ -22,11 +22,10 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
 
         public bool RequestKeepAlive { get; protected set; }
 
-        public Task<int> ReadAsync(ArraySegment<byte> buffer, CancellationToken cancellationToken = default(CancellationToken))
+        public ValueTask<int> ReadAsync(ArraySegment<byte> buffer, CancellationToken cancellationToken = default(CancellationToken))
         {
-            Task<int> result = null;
             var send100Continue = 0;
-            result = ReadAsyncImplementation(buffer, cancellationToken);
+            var result = ReadAsyncImplementation(buffer, cancellationToken);
             if (!result.IsCompleted)
             {
                 send100Continue = Interlocked.Exchange(ref _send100Continue, 0);
@@ -38,31 +37,63 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
             return result;
         }
 
-        public abstract Task<int> ReadAsyncImplementation(ArraySegment<byte> buffer, CancellationToken cancellationToken);
+        public async Task Consume(CancellationToken cancellationToken = default(CancellationToken))
+        {
+            ValueTask<int> result;
+            var send100checked = false;
+            do
+            {
+                result = ReadAsyncImplementation(default(ArraySegment<byte>), cancellationToken);
+                if (!result.IsCompleted)
+                {
+                    if (!send100checked)
+                    {
+                        if (Interlocked.Exchange(ref _send100Continue, 0) == 1)
+                        {
+                            _context.FrameControl.ProduceContinue();
+                        }
+                        send100checked = true;
+                    }
+                }
+                // ValueTask uses .GetAwaiter().GetResult() if necessary
+                else if (result.Result == 0) 
+                {
+                    // Completed Task, end of stream
+                    return;
+                }
+                else
+                {
+                    // Completed Task, get next Task rather than await
+                    continue;
+                }
+            } while (await result != 0);
+        }
+
+        public abstract ValueTask<int> ReadAsyncImplementation(ArraySegment<byte> buffer, CancellationToken cancellationToken);
 
         public static MessageBody For(
             string httpVersion,
-            IDictionary<string, StringValues> headers,
+            FrameRequestHeaders headers,
             FrameContext context)
         {
             // see also http://tools.ietf.org/html/rfc2616#section-4.4
 
             var keepAlive = httpVersion != "HTTP/1.0";
 
-            string connection;
-            if (TryGet(headers, "Connection", out connection))
+            var connection = headers.HeaderConnection.ToString();
+            if (connection.Length > 0)
             {
                 keepAlive = connection.Equals("keep-alive", StringComparison.OrdinalIgnoreCase);
             }
 
-            string transferEncoding;
-            if (TryGet(headers, "Transfer-Encoding", out transferEncoding))
+            var transferEncoding = headers.HeaderTransferEncoding.ToString();
+            if (transferEncoding.Length > 0)
             {
                 return new ForChunkedEncoding(keepAlive, context);
             }
 
-            string contentLength;
-            if (TryGet(headers, "Content-Length", out contentLength))
+            var contentLength = headers.HeaderContentLength.ToString();
+            if (contentLength.Length > 0)
             {
                 return new ForContentLength(keepAlive, int.Parse(contentLength), context);
             }
@@ -75,44 +106,20 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
             return new ForRemainingData(context);
         }
 
-        public static bool TryGet(IDictionary<string, StringValues> headers, string name, out string value)
-        {
-            StringValues values;
-            if (!headers.TryGetValue(name, out values) || values.Count == 0)
-            {
-                value = null;
-                return false;
-            }
-            var count = values.Count;
-            if (count == 0)
-            {
-                value = null;
-                return false;
-            }
-            if (count == 1)
-            {
-                value = values[0];
-                return true;
-            }
-            value = String.Join(",", values);
-            return true;
-        }
-
-
-        class ForRemainingData : MessageBody
+        private class ForRemainingData : MessageBody
         {
             public ForRemainingData(FrameContext context)
                 : base(context)
             {
             }
 
-            public override Task<int> ReadAsyncImplementation(ArraySegment<byte> buffer, CancellationToken cancellationToken)
+            public override ValueTask<int> ReadAsyncImplementation(ArraySegment<byte> buffer, CancellationToken cancellationToken)
             {
-                return _context.SocketInput.ReadAsync(buffer);
+                return _context.SocketInput.ReadAsync(buffer.Array, buffer.Offset, buffer.Array == null ? 8192 : buffer.Count);
             }
         }
 
-        class ForContentLength : MessageBody
+        private class ForContentLength : MessageBody
         {
             private readonly int _contentLength;
             private int _inputLength;
@@ -125,20 +132,39 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
                 _inputLength = _contentLength;
             }
 
-            public override async Task<int> ReadAsyncImplementation(ArraySegment<byte> buffer, CancellationToken cancellationToken)
+            public override ValueTask<int> ReadAsyncImplementation(ArraySegment<byte> buffer, CancellationToken cancellationToken)
             {
                 var input = _context.SocketInput;
 
-                var limit = Math.Min(buffer.Count, _inputLength);
+                var limit = buffer.Array == null ? _inputLength : Math.Min(buffer.Count, _inputLength);
                 if (limit == 0)
                 {
                     return 0;
                 }
 
-                var limitedBuffer = new ArraySegment<byte>(buffer.Array, buffer.Offset, limit);
-                var actual = await _context.SocketInput.ReadAsync(limitedBuffer);
-                _inputLength -= actual;
+                var task = _context.SocketInput.ReadAsync(buffer.Array, buffer.Offset, limit);
 
+                if (task.IsCompleted)
+                {
+                    // .GetAwaiter().GetResult() done by ValueTask if needed
+                    var actual = task.Result;
+                    _inputLength -= actual;
+                    if (actual == 0)
+                    {
+                        throw new InvalidDataException("Unexpected end of request content");
+                    }
+                    return actual;
+                }
+                else
+                {
+                    return ReadAsyncAwaited(task.AsTask());
+                }
+            }
+
+            private async Task<int> ReadAsyncAwaited(Task<int> task)
+            {
+                var actual = await task;
+                _inputLength -= actual;
                 if (actual == 0)
                 {
                     throw new InvalidDataException("Unexpected end of request content");
@@ -148,11 +174,10 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
             }
         }
 
-
         /// <summary>
         ///   http://tools.ietf.org/html/rfc2616#section-3.6.1
         /// </summary>
-        class ForChunkedEncoding : MessageBody
+        private class ForChunkedEncoding : MessageBody
         {
             private int _inputLength;
 
@@ -163,8 +188,12 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
             {
                 RequestKeepAlive = keepAlive;
             }
+            public override ValueTask<int> ReadAsyncImplementation(ArraySegment<byte> buffer, CancellationToken cancellationToken)
+            {
+                return ReadAsyncAwaited(buffer, cancellationToken);
+            }
 
-            public override async Task<int> ReadAsyncImplementation(ArraySegment<byte> buffer, CancellationToken cancellationToken)
+            private async Task<int> ReadAsyncAwaited(ArraySegment<byte> buffer, CancellationToken cancellationToken)
             {
                 var input = _context.SocketInput;
 
@@ -189,7 +218,7 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
                     }
                     while (_mode == Mode.ChunkData)
                     {
-                        var limit = Math.Min(buffer.Count, _inputLength);
+                        var limit = buffer.Array == null ? _inputLength : Math.Min(buffer.Count, _inputLength);
                         if (limit != 0)
                         {
                             await input;

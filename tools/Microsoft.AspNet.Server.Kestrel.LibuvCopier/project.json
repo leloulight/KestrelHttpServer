@@ -20,12 +20,21 @@
     "dnx451": {},
     "dnxcore50": {
       "dependencies": {
+<<<<<<< HEAD
         "Microsoft.CSharp": "4.0.1-beta-23516",
         "System.Collections": "4.0.11-beta-23516",
         "System.Console": "4.0.0-beta-23516",
         "System.Linq": "4.0.1-beta-23516",
         "System.Threading": "4.0.11-beta-23516",
         "System.IO.FileSystem": "4.0.1-beta-23516"
+=======
+        "Microsoft.CSharp": "4.0.1-*",
+        "System.Collections": "4.0.11-*",
+        "System.Console": "4.0.0-*",
+        "System.Linq": "4.0.1-*",
+        "System.Threading": "4.0.11-*",
+        "System.IO.FileSystem": "4.0.1-*"
+>>>>>>> refs/remotes/aspnet/dev
       }
     }
   }

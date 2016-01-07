@@ -19,17 +19,23 @@ namespace Microsoft.AspNet.Server.Kestrel.Filter
         public FilteredStreamAdapter(
             Stream filteredStream,
             MemoryPool2 memory,
-            IKestrelTrace logger)
+            IKestrelTrace logger,
+            IThreadPool threadPool)
         {
-            SocketInput = new SocketInput(memory);
-            SocketOutput = new StreamSocketOutput(filteredStream);
+            SocketInput = new SocketInput(memory, threadPool);
+            SocketOutput = new StreamSocketOutput(filteredStream, memory);
 
             _log = logger;
             _filteredStream = filteredStream;
             _socketInputStream = new SocketInputStream(SocketInput);
 
-            _filteredStream.CopyToAsync(_socketInputStream).ContinueWith((task, state) =>
+            var block = memory.Lease();
+            // Use pooled block for copy
+            _filteredStream.CopyToAsync(_socketInputStream, block).ContinueWith((task, state) =>
             {
+                var returnedBlock = task.Result;
+                returnedBlock.Pool.Return(returnedBlock);
+
                 ((FilteredStreamAdapter)state).OnStreamClose(task);
             }, this);
         }

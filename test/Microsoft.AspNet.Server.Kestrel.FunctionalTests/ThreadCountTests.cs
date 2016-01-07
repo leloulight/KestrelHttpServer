@@ -15,7 +15,6 @@ namespace Microsoft.AspNet.Server.Kestrel.FunctionalTests
 {
     public class ThreadCountTests
     {
-        [Theory(Skip = "https://github.com/aspnet/KestrelHttpServer/issues/232"), MemberData(nameof(OneToTen))]
         public async Task ZeroToTenThreads(int threadCount)
         {
             var config = new ConfigurationBuilder()
@@ -25,19 +24,20 @@ namespace Microsoft.AspNet.Server.Kestrel.FunctionalTests
                 })
                 .Build();
 
-            var hostBuilder = new WebHostBuilder(config);
-            hostBuilder.UseServer("Microsoft.AspNet.Server.Kestrel");
-            hostBuilder.UseStartup(app =>
-            {
-                var serverInfo = app.ServerFeatures.Get<IKestrelServerInformation>();
-                serverInfo.ThreadCount = threadCount;
-                app.Run(context =>
+            var applicationBuilder = new WebApplicationBuilder()
+                .UseConfiguration(config)
+                .UseServerFactory("Microsoft.AspNet.Server.Kestrel")
+                .Configure(app =>
                 {
-                    return context.Response.WriteAsync("Hello World");
-                });
-            });            
+                    var serverInfo = app.ServerFeatures.Get<IKestrelServerInformation>();
+                    serverInfo.ThreadCount = threadCount;
+                    app.Run(context =>
+                    {
+                        return context.Response.WriteAsync("Hello World");
+                    });
+                });            
 
-            using (var app = hostBuilder.Build().Start())
+            using (var app = applicationBuilder.Build().Start())
             {
                 using (var client = new HttpClient())
                 {

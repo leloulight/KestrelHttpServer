@@ -92,12 +92,16 @@ namespace Microsoft.AspNet.Server.KestrelTests
                     AddressFamily.InterNetwork,
                     SocketType.Stream,
                     ProtocolType.Tcp);
+#if DNX451
                 await Task.Factory.FromAsync(
                     socket.BeginConnect,
                     socket.EndConnect,
                     new IPEndPoint(IPAddress.Loopback, 54321),
                     null,
                     TaskCreationOptions.None);
+#else
+                await socket.ConnectAsync(new IPEndPoint(IPAddress.Loopback, 54321));
+#endif
                 socket.Dispose();
             });
             loop.Run();
@@ -141,6 +145,7 @@ namespace Microsoft.AspNet.Server.KestrelTests
                     AddressFamily.InterNetwork,
                     SocketType.Stream,
                     ProtocolType.Tcp);
+#if DNX451
                 await Task.Factory.FromAsync(
                     socket.BeginConnect,
                     socket.EndConnect,
@@ -154,6 +159,11 @@ namespace Microsoft.AspNet.Server.KestrelTests
                     SocketFlags.None,
                     null,
                     TaskCreationOptions.None);
+#else
+                await socket.ConnectAsync(new IPEndPoint(IPAddress.Loopback, 54321));
+                await socket.SendAsync(new[] { new ArraySegment<byte>(new byte[] { 1, 2, 3, 4, 5 }) },
+                                       SocketFlags.None);
+#endif
                 socket.Dispose();
             });
             loop.Run();
@@ -191,12 +201,22 @@ namespace Microsoft.AspNet.Server.KestrelTests
                             {
                                 var req = new UvWriteReq(new KestrelTrace(new TestKestrelTrace()));
                                 req.Init(loop);
+                                var block = MemoryPoolBlock2.Create(
+                                    new ArraySegment<byte>(new byte[] { 65, 66, 67, 68, 69 }),
+                                    dataPtr: IntPtr.Zero,
+                                    pool: null,
+                                    slab: null);
+                                var start = new MemoryPoolIterator2(block, 0);
+                                var end = new MemoryPoolIterator2(block, block.Data.Count);
                                 req.Write(
                                     tcp2,
-                                    new ArraySegment<ArraySegment<byte>>(
-                                        new[] { new ArraySegment<byte>(new byte[] { 65, 66, 67, 68, 69 }) }
-                                        ),
-                                    (_1, _2, _3, _4) => { },
+                                    start,
+                                    end,
+                                    1,
+                                    (_1, _2, _3, _4) =>
+                                    {
+                                        block.Unpin();
+                                    },
                                     null);
                             }
                         }
@@ -211,6 +231,7 @@ namespace Microsoft.AspNet.Server.KestrelTests
                     AddressFamily.InterNetwork,
                     SocketType.Stream,
                     ProtocolType.Tcp);
+#if DNX451
                 await Task.Factory.FromAsync(
                     socket.BeginConnect,
                     socket.EndConnect,
@@ -224,10 +245,16 @@ namespace Microsoft.AspNet.Server.KestrelTests
                     SocketFlags.None,
                     null,
                     TaskCreationOptions.None);
+#else
+                await socket.ConnectAsync(new IPEndPoint(IPAddress.Loopback, 54321));
+                await socket.SendAsync(new[] { new ArraySegment<byte>(new byte[] { 1, 2, 3, 4, 5 }) },
+                                       SocketFlags.None);
+#endif
                 socket.Shutdown(SocketShutdown.Send);
                 var buffer = new ArraySegment<byte>(new byte[2048]);
                 while (true)
                 {
+#if DNX451
                     var count = await Task.Factory.FromAsync(
                         socket.BeginReceive,
                         socket.EndReceive,
@@ -235,6 +262,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
                         SocketFlags.None,
                         null,
                         TaskCreationOptions.None);
+#else
+                    var count = await socket.ReceiveAsync(new[] { buffer }, SocketFlags.None);
+#endif
                     Console.WriteLine("count {0} {1}",
                         count,
                         System.Text.Encoding.ASCII.GetString(buffer.Array, 0, count));

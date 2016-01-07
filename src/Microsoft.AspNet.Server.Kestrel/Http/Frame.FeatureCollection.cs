@@ -6,21 +6,27 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNet.Http;
 using Microsoft.AspNet.Http.Features;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
 
 namespace Microsoft.AspNet.Server.Kestrel.Http
 {
-    public partial class Frame : IFeatureCollection, IHttpRequestFeature, IHttpResponseFeature, IHttpUpgradeFeature
+    public partial class Frame : IFeatureCollection,
+                                 IHttpRequestFeature,
+                                 IHttpResponseFeature,
+                                 IHttpUpgradeFeature,
+                                 IHttpConnectionFeature,
+                                 IHttpRequestLifetimeFeature
     {
         // NOTE: When feature interfaces are added to or removed from this Frame class implementation,
         // then the list of `implementedFeatures` in the generated code project MUST also be updated.
         // See also: tools/Microsoft.AspNet.Server.Kestrel.GeneratedCode/FrameFeatureCollection.cs
 
-        private string _scheme;
-        private string _pathBase;
         private int _featureRevision;
 
         private List<KeyValuePair<Type, object>> MaybeExtra;
@@ -85,12 +91,12 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
         {
             get
             {
-                return _scheme ?? "http";
+                return Scheme ?? "http";
             }
 
             set
             {
-                _scheme = value;
+                Scheme = value;
             }
         }
 
@@ -111,12 +117,12 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
         {
             get
             {
-                return _pathBase ?? "";
+                return PathBase ?? "";
             }
 
             set
             {
-                _pathBase = value;
+                PathBase = value;
             }
         }
 
@@ -224,6 +230,18 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
             }
         }
 
+        CancellationToken IHttpRequestLifetimeFeature.RequestAborted
+        {
+            get
+            {
+                return RequestAborted;
+            }
+            set
+            {
+                RequestAborted = value;
+            }
+        }
+
         bool IHttpResponseFeature.HasStarted
         {
             get { return HasResponseStarted; }
@@ -246,10 +264,30 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
 
         int IFeatureCollection.Revision => _featureRevision;
 
+        IPAddress IHttpConnectionFeature.RemoteIpAddress { get; set; }
+
+        IPAddress IHttpConnectionFeature.LocalIpAddress { get; set; }
+
+        int IHttpConnectionFeature.RemotePort { get; set; }
+
+        int IHttpConnectionFeature.LocalPort { get; set; }
+
+        bool IHttpConnectionFeature.IsLocal { get; set; }
+
         object IFeatureCollection.this[Type key]
         {
             get { return FastFeatureGet(key); }
             set { FastFeatureSet(key, value); }
+        }
+
+        TFeature IFeatureCollection.Get<TFeature>()
+        {
+            return (TFeature)FastFeatureGet(typeof(TFeature));
+        }
+
+        void IFeatureCollection.Set<TFeature>(TFeature instance)
+        {
+            FastFeatureSet(typeof(TFeature), instance);
         }
 
         void IHttpResponseFeature.OnStarting(Func<object, Task> callback, object state)
@@ -262,7 +300,7 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
             OnCompleted(callback, state);
         }
 
-        Task<Stream> IHttpUpgradeFeature.UpgradeAsync()
+        async Task<Stream> IHttpUpgradeFeature.UpgradeAsync()
         {
             StatusCode = 101;
             ReasonPhrase = "Switching Protocols";
@@ -275,12 +313,19 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
                     ResponseHeaders["Upgrade"] = values;
                 }
             }
-            ProduceStartAndFireOnStarting(immediate: true).GetAwaiter().GetResult();
-            return Task.FromResult(DuplexStream);
+
+            await ProduceStartAndFireOnStarting(immediate: true); 
+
+            return DuplexStream;
         }
 
         IEnumerator<KeyValuePair<Type, object>> IEnumerable<KeyValuePair<Type, object>>.GetEnumerator() => FastEnumerable().GetEnumerator();
 
         IEnumerator IEnumerable.GetEnumerator() => FastEnumerable().GetEnumerator();
+
+        void IHttpRequestLifetimeFeature.Abort()
+        {
+            Abort();
+        }
     }
 }

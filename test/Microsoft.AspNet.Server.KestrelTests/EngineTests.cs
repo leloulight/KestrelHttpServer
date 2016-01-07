@@ -2,14 +2,19 @@
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
 using System;
+using System.Linq;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNet.Http;
 using Microsoft.AspNet.Http.Features;
 using Microsoft.AspNet.Server.Kestrel;
 using Microsoft.AspNet.Server.Kestrel.Filter;
+using Microsoft.AspNet.Server.Kestrel.Http;
+using Microsoft.AspNet.Testing.xunit;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -39,10 +44,10 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        private async Task App(IFeatureCollection frame)
+        private async Task App(HttpContext httpContext)
         {
-            var request = frame.Get<IHttpRequestFeature>();
-            var response = frame.Get<IHttpResponseFeature>();
+            var request = httpContext.Request;
+            var response = httpContext.Response;
             response.Headers.Clear();
             while (true)
             {
@@ -56,10 +61,10 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        private async Task AppChunked(IFeatureCollection frame)
+        private async Task AppChunked(HttpContext httpContext)
         {
-            var request = frame.Get<IHttpRequestFeature>();
-            var response = frame.Get<IHttpResponseFeature>();
+            var request = httpContext.Request;
+            var response = httpContext.Response;
             var data = new MemoryStream();
             await request.Body.CopyToAsync(data);
             var bytes = data.ToArray();
@@ -69,14 +74,15 @@ namespace Microsoft.AspNet.Server.KestrelTests
             await response.Body.WriteAsync(bytes, 0, bytes.Length);
         }
 
-        private Task EmptyApp(IFeatureCollection frame)
+        private Task EmptyApp(HttpContext httpContext)
         {
-            frame.Get<IHttpResponseFeature>().Headers.Clear();
+            httpContext.Response.Headers.Clear();
             return Task.FromResult<object>(null);
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public void EngineCanStartAndStop(ServiceContext testContext)
         {
             var engine = new KestrelEngine(testContext);
@@ -84,26 +90,30 @@ namespace Microsoft.AspNet.Server.KestrelTests
             engine.Dispose();
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
-        public void ListenerCanCreateAndDispose(ServiceContext testContext)
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
+        public void ListenerCanCreateAndDispose(TestServiceContext testContext)
         {
+            testContext.App = App;
             var engine = new KestrelEngine(testContext);
             engine.Start(1);
             var address = ServerAddress.FromUrl("http://localhost:54321/");
-            var started = engine.CreateServer(address, App);
+            var started = engine.CreateServer(address);
             started.Dispose();
             engine.Dispose();
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
-        public void ConnectionCanReadAndWrite(ServiceContext testContext)
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
+        public void ConnectionCanReadAndWrite(TestServiceContext testContext)
         {
+            testContext.App = App;
             var engine = new KestrelEngine(testContext);
             engine.Start(1);
             var address = ServerAddress.FromUrl("http://localhost:54321/");
-            var started = engine.CreateServer(address, App);
+            var started = engine.CreateServer(address);
 
             Console.WriteLine("Started");
             var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
@@ -122,8 +132,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
         }
 
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task Http10(ServiceContext testContext)
         {
             using (var server = new TestServer(App, testContext))
@@ -143,8 +154,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
         }
 
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task Http11(ServiceContext testContext)
         {
             using (var server = new TestServer(AppChunked, testContext))
@@ -163,16 +175,103 @@ namespace Microsoft.AspNet.Server.KestrelTests
                         "Content-Length: 0",
                         "",
                         "HTTP/1.1 200 OK",
-                        "Content-Length: 7",
                         "Connection: close",
+                        "Content-Length: 7",
                         "",
                         "Goodbye");
                 }
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        public async Task ReuseStreamsOn(ServiceContext testContext)
+        {
+            testContext.ReuseStreams = true;
+
+            var streamCount = 0;
+            var loopCount = 20;
+            Stream lastStream = null;
+
+            using (var server = new TestServer(
+                context =>
+                    {
+                        if (context.Request.Body != lastStream)
+                        {
+                            lastStream = context.Request.Body;
+                            streamCount++;
+                        }
+                        context.Response.Headers.Clear();
+                        return context.Request.Body.CopyToAsync(context.Response.Body);
+                    },
+                    testContext))
+            {
+
+                using (var connection = new TestConnection())
+                {
+                    var requestData = 
+                        Enumerable.Repeat("GET / HTTP/1.1\r\n", loopCount)
+                            .Concat(new[] { "GET / HTTP/1.1\r\nConnection: close\r\n\r\nGoodbye" });
+
+                    var responseData = 
+                        Enumerable.Repeat("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n", loopCount)
+                            .Concat(new[] { "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nGoodbye" });
+
+                    await connection.SendEnd(requestData.ToArray());
+                    
+                    await connection.ReceiveEnd(responseData.ToArray());
+                }
+
+                Assert.Equal(1, streamCount);
+            }
+        }
+
+        [ConditionalTheory]
+        [MemberData(nameof(ConnectionFilterData))]
+        public async Task ReuseStreamsOff(ServiceContext testContext)
+        {
+            testContext.ReuseStreams = false;
+
+            var streamCount = 0;
+            var loopCount = 20;
+            Stream lastStream = null;
+
+            using (var server = new TestServer(
+                context =>
+                {
+                    if (context.Request.Body != lastStream)
+                    {
+                        lastStream = context.Request.Body;
+                        streamCount++;
+                    }
+                    context.Response.Headers.Clear();
+                    return context.Request.Body.CopyToAsync(context.Response.Body);
+                },
+                    testContext))
+            {
+
+                using (var connection = new TestConnection())
+                {
+                    var requestData =
+                        Enumerable.Repeat("GET / HTTP/1.1\r\n", loopCount)
+                            .Concat(new[] { "GET / HTTP/1.1\r\nConnection: close\r\n\r\nGoodbye" });
+
+                    var responseData =
+                        Enumerable.Repeat("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n", loopCount)
+                            .Concat(new[] { "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nGoodbye" });
+
+                    await connection.SendEnd(requestData.ToArray());
+
+                    await connection.ReceiveEnd(responseData.ToArray());
+                }
+
+                Assert.Equal(loopCount + 1, streamCount);
+            }
+        }
+
+        [ConditionalTheory]
+        [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task Http10ContentLength(ServiceContext testContext)
         {
             using (var server = new TestServer(App, testContext))
@@ -192,8 +291,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task Http10TransferEncoding(ServiceContext testContext)
         {
             using (var server = new TestServer(App, testContext))
@@ -213,8 +313,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task Http10KeepAlive(ServiceContext testContext)
         {
             using (var server = new TestServer(AppChunked, testContext))
@@ -230,8 +331,8 @@ namespace Microsoft.AspNet.Server.KestrelTests
                         "Goodbye");
                     await connection.Receive(
                         "HTTP/1.0 200 OK",
-                        "Content-Length: 0",
                         "Connection: keep-alive",
+                        "Content-Length: 0",
                         "\r\n");
                     await connection.ReceiveEnd(
                         "HTTP/1.0 200 OK",
@@ -242,8 +343,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task Http10KeepAliveNotUsedIfResponseContentLengthNotSet(ServiceContext testContext)
         {
             using (var server = new TestServer(App, testContext))
@@ -255,14 +357,14 @@ namespace Microsoft.AspNet.Server.KestrelTests
                         "Connection: keep-alive",
                         "",
                         "POST / HTTP/1.0",
-                        "Connection: keep-alive",
                         "Content-Length: 7",
+                        "Connection: keep-alive",
                         "",
                         "Goodbye");
                     await connection.Receive(
                         "HTTP/1.0 200 OK",
-                        "Content-Length: 0",
                         "Connection: keep-alive",
+                        "Content-Length: 0",
                         "\r\n");
                     await connection.ReceiveEnd(
                         "HTTP/1.0 200 OK",
@@ -272,8 +374,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task Http10KeepAliveContentLength(ServiceContext testContext)
         {
             using (var server = new TestServer(AppChunked, testContext))
@@ -282,16 +385,16 @@ namespace Microsoft.AspNet.Server.KestrelTests
                 {
                     await connection.SendEnd(
                         "POST / HTTP/1.0",
-                        "Connection: keep-alive",
                         "Content-Length: 11",
+                        "Connection: keep-alive",
                         "",
                         "Hello WorldPOST / HTTP/1.0",
                         "",
                         "Goodbye");
                     await connection.Receive(
                         "HTTP/1.0 200 OK",
-                        "Content-Length: 11",
                         "Connection: keep-alive",
+                        "Content-Length: 11",
                         "",
                         "Hello World");
                     await connection.ReceiveEnd(
@@ -303,8 +406,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task Http10KeepAliveTransferEncoding(ServiceContext testContext)
         {
             using (var server = new TestServer(AppChunked, testContext))
@@ -322,8 +426,8 @@ namespace Microsoft.AspNet.Server.KestrelTests
                         "Goodbye");
                     await connection.Receive(
                         "HTTP/1.0 200 OK",
-                        "Content-Length: 11",
                         "Connection: keep-alive",
+                        "Content-Length: 11",
                         "",
                         "Hello World");
                     await connection.ReceiveEnd(
@@ -335,8 +439,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task Expect100ContinueForBody(ServiceContext testContext)
         {
             using (var server = new TestServer(AppChunked, testContext))
@@ -346,28 +451,29 @@ namespace Microsoft.AspNet.Server.KestrelTests
                     await connection.Send(
                         "POST / HTTP/1.1",
                         "Expect: 100-continue",
-                        "Content-Length: 11",
                         "Connection: close",
+                        "Content-Length: 11",
                         "\r\n");
                     await connection.Receive("HTTP/1.1 100 Continue", "\r\n");
                     await connection.SendEnd("Hello World");
                     await connection.Receive(
                         "HTTP/1.1 200 OK",
-                        "Content-Length: 11",
                         "Connection: close",
+                        "Content-Length: 11",
                         "",
                         "Hello World");
                 }
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task DisconnectingClient(ServiceContext testContext)
         {
             using (var server = new TestServer(App, testContext))
             {
-                var socket = new Socket(SocketType.Stream, ProtocolType.IP);
+                var socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
                 socket.Connect(IPAddress.Loopback, 54321);
                 await Task.Delay(200);
                 socket.Dispose();
@@ -385,8 +491,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task ZeroContentLengthSetAutomaticallyAfterNoWrites(ServiceContext testContext)
         {
             using (var server = new TestServer(EmptyApp, testContext))
@@ -405,16 +512,17 @@ namespace Microsoft.AspNet.Server.KestrelTests
                         "Content-Length: 0",
                         "",
                         "HTTP/1.0 200 OK",
-                        "Content-Length: 0",
                         "Connection: keep-alive",
+                        "Content-Length: 0",
                         "",
                         "");
                 }
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task ZeroContentLengthNotSetAutomaticallyForNonKeepAliveRequests(ServiceContext testContext)
         {
             using (var server = new TestServer(EmptyApp, testContext))
@@ -447,8 +555,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task ZeroContentLengthNotSetAutomaticallyForHeadRequests(ServiceContext testContext)
         {
             using (var server = new TestServer(EmptyApp, testContext))
@@ -467,14 +576,15 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task ZeroContentLengthNotSetAutomaticallyForCertainStatusCodes(ServiceContext testContext)
         {
-            using (var server = new TestServer(async frame =>
+            using (var server = new TestServer(async httpContext =>
             {
-                var request = frame.Get<IHttpRequestFeature>();
-                var response = frame.Get<IHttpResponseFeature>();
+                var request = httpContext.Request;
+                var response = httpContext.Response;
                 response.Headers.Clear();
 
                 using (var reader = new StreamReader(request.Body, Encoding.ASCII))
@@ -520,8 +630,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task ThrowingResultsIn500Response(ServiceContext testContext)
         {
             bool onStartingCalled = false;
@@ -529,9 +640,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             var testLogger = new TestApplicationErrorLogger();
             testContext.Log = new KestrelTrace(testLogger);
 
-            using (var server = new TestServer(frame =>
+            using (var server = new TestServer(httpContext =>
             {
-                var response = frame.Get<IHttpResponseFeature>();
+                var response = httpContext.Response;
                 response.OnStarting(_ =>
                 {
                     onStartingCalled = true;
@@ -563,11 +674,12 @@ namespace Microsoft.AspNet.Server.KestrelTests
                         "",
                         "HTTP/1.1 500 Internal Server Error",
                         "");
+                    await connection.Receive("Connection: close",
+                        "");
                     await connection.ReceiveStartsWith("Date:");
                     await connection.ReceiveEnd(
                         "Content-Length: 0",
                         "Server: Kestrel",
-                        "Connection: close",
                         "",
                         "");
 
@@ -577,8 +689,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task ThrowingAfterWritingKillsConnection(ServiceContext testContext)
         {
             bool onStartingCalled = false;
@@ -586,9 +699,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             var testLogger = new TestApplicationErrorLogger();
             testContext.Log = new KestrelTrace(testLogger);
 
-            using (var server = new TestServer(async frame =>
+            using (var server = new TestServer(async httpContext =>
             {
-                var response = frame.Get<IHttpResponseFeature>();
+                var response = httpContext.Response;
                 response.OnStarting(_ =>
                 {
                     onStartingCalled = true;
@@ -619,8 +732,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task ThrowingAfterPartialWriteKillsConnection(ServiceContext testContext)
         {
             bool onStartingCalled = false;
@@ -628,9 +742,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             var testLogger = new TestApplicationErrorLogger();
             testContext.Log = new KestrelTrace(testLogger);
 
-            using (var server = new TestServer(async frame =>
+            using (var server = new TestServer(async httpContext =>
             {
-                var response = frame.Get<IHttpResponseFeature>();
+                var response = httpContext.Response;
                 response.OnStarting(_ =>
                 {
                     onStartingCalled = true;
@@ -661,8 +775,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task ConnectionClosesWhenFinReceived(ServiceContext testContext)
         {
             using (var server = new TestServer(AppChunked, testContext))
@@ -688,8 +803,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task ConnectionClosesWhenFinReceivedBeforeRequestCompletes(ServiceContext testContext)
         {
             using (var server = new TestServer(AppChunked, testContext))
@@ -730,8 +846,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task ThrowingInOnStartingResultsInFailedWritesAnd500Response(ServiceContext testContext)
         {
             var onStartingCallCount1 = 0;
@@ -741,11 +858,11 @@ namespace Microsoft.AspNet.Server.KestrelTests
             var testLogger = new TestApplicationErrorLogger();
             testContext.Log = new KestrelTrace(testLogger);
 
-            using (var server = new TestServer(async frame =>
+            using (var server = new TestServer(async httpContext =>
             {
                 var onStartingException = new Exception();
 
-                var response = frame.Get<IHttpResponseFeature>();
+                var response = httpContext.Response;
                 response.OnStarting(_ =>
                 {
                     onStartingCallCount1++;
@@ -786,12 +903,12 @@ namespace Microsoft.AspNet.Server.KestrelTests
                         "Server: Kestrel",
                         "",
                         "HTTP/1.1 500 Internal Server Error",
+                        "Connection: close",
                         "");
                     await connection.ReceiveStartsWith("Date:");
                     await connection.ReceiveEnd(
                         "Content-Length: 0",
                         "Server: Kestrel",
-                        "Connection: close",
                         "",
                         "");
 
@@ -803,7 +920,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task ThrowingInOnCompletedIsLoggedAndClosesConnection(ServiceContext testContext)
         {
             var onCompletedCalled1 = false;
@@ -812,9 +931,9 @@ namespace Microsoft.AspNet.Server.KestrelTests
             var testLogger = new TestApplicationErrorLogger();
             testContext.Log = new KestrelTrace(testLogger);
 
-            using (var server = new TestServer(async frame =>
+            using (var server = new TestServer(async httpContext =>
             {
-                var response = frame.Get<IHttpResponseFeature>();
+                var response = httpContext.Response;
                 response.OnCompleted(_ =>
                 {
                     onCompletedCalled1 = true;
@@ -852,14 +971,15 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
-        [Theory]
+        [ConditionalTheory]
         [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
         public async Task RequestBodyIsConsumedAutomaticallyIfAppDoesntConsumeItFully(ServiceContext testContext)
         {
-            using (var server = new TestServer(async frame =>
+            using (var server = new TestServer(async httpContext =>
             {
-                var response = frame.Get<IHttpResponseFeature>();
-                var request = frame.Get<IHttpRequestFeature>();
+                var response = httpContext.Response;
+                var request = httpContext.Request;
 
                 Assert.Equal("POST", request.Method);
 
@@ -898,18 +1018,154 @@ namespace Microsoft.AspNet.Server.KestrelTests
             }
         }
 
+        [ConditionalTheory]
+        [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
+        public async Task RequestsCanBeAbortedMidRead(ServiceContext testContext)
+        {
+            var readTcs = new TaskCompletionSource<object>();
+            var registrationTcs = new TaskCompletionSource<int>();
+            var requestId = 0;
+
+            using (var server = new TestServer(async httpContext =>
+            {
+                requestId++;
+
+                var response = httpContext.Response;
+                var request = httpContext.Request;
+                var lifetime = httpContext.Features.Get<IHttpRequestLifetimeFeature>();
+
+                lifetime.RequestAborted.Register(() => registrationTcs.TrySetResult(requestId));
+
+                if (requestId == 1)
+                {
+                    response.Headers.Clear();
+                    response.Headers["Content-Length"] = new[] { "5" };
+
+                    await response.WriteAsync("World");
+                }
+                else
+                {
+                    var readTask = request.Body.CopyToAsync(Stream.Null);
+
+                    lifetime.Abort();
+
+                    try
+                    {
+                        await readTask;
+                    }
+                    catch (Exception ex)
+                    {
+                        readTcs.SetException(ex);
+                        throw;
+                    }
+
+                    readTcs.SetCanceled();
+                }
+            }, testContext))
+            {
+                using (var connection = new TestConnection())
+                {
+                    // Never send the body so CopyToAsync always fails.
+                    await connection.Send(
+                        "POST / HTTP/1.1",
+                        "Content-Length: 5",
+                        "",
+                        "HelloPOST / HTTP/1.1",
+                        "Content-Length: 5",
+                        "",
+                        "");
+
+                    await connection.ReceiveEnd(
+                        "HTTP/1.1 200 OK",
+                        "Content-Length: 5",
+                        "",
+                        "World");
+                }
+            }
+
+            await Assert.ThrowsAsync<IOException>(async () => await readTcs.Task);
+
+            // The cancellation token for only the last request should be triggered.
+            var abortedRequestId = await registrationTcs.Task;
+            Assert.Equal(2, abortedRequestId);
+        }
+
+        [ConditionalTheory]
+        [MemberData(nameof(ConnectionFilterData))]
+        [FrameworkSkipCondition(RuntimeFrameworks.Mono, SkipReason = "Test hangs after execution on Mono.")]
+        public async Task FailedWritesResultInAbortedRequest(ServiceContext testContext)
+        {
+            var writeTcs = new TaskCompletionSource<object>();
+            var registrationWh = new ManualResetEventSlim();
+            var connectionCloseWh = new ManualResetEventSlim();
+
+            using (var server = new TestServer(async httpContext =>
+            {
+                var response = httpContext.Response;
+                var request = httpContext.Request;
+                var lifetime = httpContext.Features.Get<IHttpRequestLifetimeFeature>();
+
+                lifetime.RequestAborted.Register(() => registrationWh.Set());
+
+                await request.Body.CopyToAsync(Stream.Null);
+                connectionCloseWh.Wait();
+
+                response.Headers.Clear();
+                response.Headers["Content-Length"] = new[] { "5" };
+
+                try
+                {
+                    // Ensure write is long enough to disable write-behind buffering
+                    for (int i = 0; i < 10; i++)
+                    {
+                        await response.WriteAsync(new string('a', 65537));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    writeTcs.SetException(ex);
+
+                    // Give a chance for RequestAborted to trip before the app completes
+                    registrationWh.Wait(1000);
+
+                    throw;
+                }
+
+                writeTcs.SetCanceled();
+            }, testContext))
+            {
+                using (var connection = new TestConnection())
+                {
+                    await connection.Send(
+                        "POST / HTTP/1.1",
+                        "Content-Length: 5",
+                        "",
+                        "Hello");
+                    // Don't wait to receive the response. Just close the socket.
+                }
+
+                connectionCloseWh.Set();
+
+                // Write failed
+                await Assert.ThrowsAsync<IOException>(async () => await writeTcs.Task);
+                // RequestAborted tripped
+                Assert.True(registrationWh.Wait(200));
+            }
+        }
+
         private class TestApplicationErrorLogger : ILogger
         {
             public int ApplicationErrorsLogged { get; set; }
 
             public IDisposable BeginScopeImpl(object state)
             {
-                throw new NotImplementedException();
+                return new Disposable(() => { });
             }
 
             public bool IsEnabled(LogLevel logLevel)
             {
-                throw new NotImplementedException();
+                return true;
             }
 
             public void Log(LogLevel logLevel, int eventId, object state, Exception exception, Func<object, Exception, string> formatter)

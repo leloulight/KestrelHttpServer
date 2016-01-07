@@ -4,13 +4,18 @@
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNet.Builder;
 using Microsoft.AspNet.Http.Features;
-using Microsoft.AspNet.Server.Kestrel.Filter;
+using Microsoft.AspNet.Server.Kestrel.Https;
 
-namespace Microsoft.AspNet.Server.Kestrel.Https
+namespace Microsoft.AspNet.Server.Kestrel.Filter
 {
     public static class HttpsApplicationBuilderExtensions
     {
         public static IApplicationBuilder UseKestrelHttps(this IApplicationBuilder app, X509Certificate2 cert)
+        {
+            return app.UseKestrelHttps(new HttpsConnectionFilterOptions { ServerCertificate = cert});
+        }
+
+        public static IApplicationBuilder UseKestrelHttps(this IApplicationBuilder app, HttpsConnectionFilterOptions options)
         {
             var serverInfo = app.ServerFeatures.Get<IKestrelServerInformation>();
 
@@ -21,7 +26,7 @@ namespace Microsoft.AspNet.Server.Kestrel.Https
 
             var prevFilter = serverInfo.ConnectionFilter ?? new NoOpConnectionFilter();
 
-            serverInfo.ConnectionFilter = new HttpsConnectionFilter(cert, prevFilter);
+            serverInfo.ConnectionFilter = new HttpsConnectionFilter(options, prevFilter);
 
             return app;
         }

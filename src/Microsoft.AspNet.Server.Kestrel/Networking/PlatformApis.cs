@@ -8,22 +8,27 @@ namespace Microsoft.AspNet.Server.Kestrel.Networking
 {
     public static class PlatformApis
     {
-        public static bool IsWindows()
+        static PlatformApis()
         {
 #if DOTNET5_4 || DNXCORE50
-            // Until Environment.OSVersion.Platform is exposed on .NET Core, we
-            // try to call uname and if that fails we assume we are on Windows.
-            return GetUname() == string.Empty;
+            IsWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+            IsDarwin = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
 #else
             var p = (int)Environment.OSVersion.Platform;
-            return (p != 4) && (p != 6) && (p != 128);
+            IsWindows = (p != 4) && (p != 6) && (p != 128);
+
+            if (!IsWindows)
+            {
+                // When running on Mono in Darwin OSVersion doesn't return Darwin. It returns Unix instead.
+                // Fallback to use uname.
+                IsDarwin = string.Equals(GetUname(), "Darwin", StringComparison.Ordinal);
+            }
 #endif
         }
 
-        public static bool IsDarwin()
-        {
-            return string.Equals(GetUname(), "Darwin", StringComparison.Ordinal);
-        }
+        public static bool IsWindows { get; }
+
+        public static bool IsDarwin { get; }
 
         [DllImport("libc")]
         static extern int uname(IntPtr buf);

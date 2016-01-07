@@ -3,12 +3,22 @@
   "dependencies": {
     "Microsoft.AspNet.Server.Kestrel": "1.0.0-rc1-final"
   },
+<<<<<<< HEAD
+=======
+  "compilationOptions": {
+    "emitEntryPoint": true
+  },
+>>>>>>> refs/remotes/aspnet/dev
   "frameworks": {
     "dnx451": {},
     "dnxcore50": {}
   },
   "commands": {
+<<<<<<< HEAD
     "run": "Microsoft.AspNet.Server.Kestrel",
     "web": "Microsoft.AspNet.Hosting"
+=======
+    "web": "LargeResponseApp"
+>>>>>>> refs/remotes/aspnet/dev
   }
 }

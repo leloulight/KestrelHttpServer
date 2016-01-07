@@ -1,5 +1,7 @@
-﻿using System.Linq;
+﻿using System;
+using System.Linq;
 using Microsoft.AspNet.Server.Kestrel.Infrastructure;
+using System.Numerics;
 using Xunit;
 
 namespace Microsoft.AspNet.Server.KestrelTests
@@ -16,19 +18,95 @@ namespace Microsoft.AspNet.Server.KestrelTests
                 {
                     block.Array[block.End++] = ch;
                 }
+
+                var vectorMaxValues = new Vector<byte>(byte.MaxValue);
+
                 var iterator = block.GetIterator();
-                foreach (var ch in Enumerable.Range(0, 256).Select(x => (char)x))
+                foreach (var ch in Enumerable.Range(0, 256).Select(x => (byte)x))
                 {
+                    var vectorCh = new Vector<byte>(ch);
+
                     var hit = iterator;
-                    hit.Seek(ch);
+                    hit.Seek(ref vectorCh);
                     Assert.Equal(ch, iterator.GetLength(hit));
 
                     hit = iterator;
-                    hit.Seek(ch, byte.MaxValue);
+                    hit.Seek(ref vectorCh, ref vectorMaxValues);
                     Assert.Equal(ch, iterator.GetLength(hit));
 
                     hit = iterator;
-                    hit.Seek(byte.MaxValue, ch);
+                    hit.Seek(ref vectorMaxValues, ref vectorCh);
+                    Assert.Equal(ch, iterator.GetLength(hit));
+
+                    hit = iterator;
+                    hit.Seek(ref vectorCh, ref vectorMaxValues, ref vectorMaxValues);
+                    Assert.Equal(ch, iterator.GetLength(hit));
+
+                    hit = iterator;
+                    hit.Seek(ref vectorMaxValues, ref vectorCh, ref vectorMaxValues);
+                    Assert.Equal(ch, iterator.GetLength(hit));
+
+                    hit = iterator;
+                    hit.Seek(ref vectorCh, ref vectorMaxValues, ref vectorMaxValues);
+                    Assert.Equal(ch, iterator.GetLength(hit));
+                }
+            }
+        }
+
+        [Fact]
+        public void SeekWorksAcrossBlocks()
+        {
+            Console.WriteLine($"Vector.IsHardwareAccelerated == {Vector.IsHardwareAccelerated}");
+            Console.WriteLine($"Vector<byte>.Count == {Vector<byte>.Count}");
+
+            using (var pool = new MemoryPool2())
+            {
+                var block1 = pool.Lease(256);
+                var block2 = block1.Next = pool.Lease(256);
+                var block3 = block2.Next = pool.Lease(256);
+
+                foreach (var ch in Enumerable.Range(0, 34).Select(x => (byte)x))
+                {
+                    block1.Array[block1.End++] = ch;
+                }
+                foreach (var ch in Enumerable.Range(34, 25).Select(x => (byte)x))
+                {
+                    block2.Array[block2.End++] = ch;
+                }
+                foreach (var ch in Enumerable.Range(59, 197).Select(x => (byte)x))
+                {
+                    block3.Array[block3.End++] = ch;
+                }
+
+                var vectorMaxValues = new Vector<byte>(byte.MaxValue);
+
+                var iterator = block1.GetIterator();
+                foreach (var ch in Enumerable.Range(0, 256).Select(x => (byte)x))
+                {
+                    var vectorCh = new Vector<byte>(ch);
+
+                    var hit = iterator;
+                    hit.Seek(ref vectorCh);
+                    Assert.Equal(ch, iterator.GetLength(hit));
+
+                    hit = iterator;
+                    hit.Seek(ref vectorCh, ref vectorMaxValues);
+                    Assert.Equal(ch, iterator.GetLength(hit));
+
+                    hit = iterator;
+                    hit.Seek(ref vectorMaxValues, ref vectorCh);
+                    Assert.Equal(ch, iterator.GetLength(hit));
+
+                    hit = iterator;
+                    hit.Seek(ref vectorCh, ref vectorMaxValues, ref vectorMaxValues);
+                    Assert.Equal(ch, iterator.GetLength(hit));
+
+                    hit = iterator;
+                    hit.Seek(ref vectorMaxValues, ref vectorCh, ref vectorMaxValues);
+                    Assert.Equal(ch, iterator.GetLength(hit));
+
+                    hit = iterator;
+                    hit.Seek(ref vectorMaxValues, ref vectorMaxValues, ref vectorCh);
                     Assert.Equal(ch, iterator.GetLength(hit));
                 }
             }
@@ -149,6 +227,39 @@ namespace Microsoft.AspNet.Server.KestrelTests
 
                 endIterator.CopyTo(array, 0, 256, out actual);
                 Assert.Equal(0, actual);
+            }
+        }
+
+        [Fact]
+        public void CopyFromCorrectlyTraversesBlocks()
+        {
+            using (var pool = new MemoryPool2())
+            {
+                var block1 = pool.Lease(128);
+                var start = block1.GetIterator();
+                var end = start;
+                var bufferSize = block1.Data.Count * 3;
+                var buffer = new byte[bufferSize];
+
+                for (int i = 0; i < bufferSize; i++)
+                {
+                    buffer[i] = (byte)(i % 73);
+                }
+
+                Assert.Null(block1.Next);
+
+                end.CopyFrom(new ArraySegment<byte>(buffer));
+
+                Assert.NotNull(block1.Next);
+
+                for (int i = 0; i < bufferSize; i++)
+                {
+                    Assert.Equal(i % 73, start.Take());
+                }
+
+                Assert.Equal(-1, start.Take());
+                Assert.Equal(start.Block, end.Block);
+                Assert.Equal(start.Index, end.Index);
             }
         }
 

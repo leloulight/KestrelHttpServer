@@ -10,11 +10,12 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
 {
     public class FrameRequestStream : Stream
     {
-        private readonly MessageBody _body;
+        private MessageBody _body;
+        private FrameStreamState _state;
 
-        public FrameRequestStream(MessageBody body)
+        public FrameRequestStream()
         {
-            _body = body;
+            _state = FrameStreamState.Closed;
         }
 
         public override bool CanRead { get { return true; } }
@@ -50,12 +51,17 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
 
         public override int Read(byte[] buffer, int offset, int count)
         {
+            ValidateState();
+
+            // ValueTask uses .GetAwaiter().GetResult() if necessary
             return ReadAsync(buffer, offset, count).Result;
         }
 
 #if NET451
         public override IAsyncResult BeginRead(byte[] buffer, int offset, int count, AsyncCallback callback, object state)
         {
+            ValidateState();
+
             var task = ReadAsync(buffer, offset, count, CancellationToken.None, state);
             if (callback != null)
             {
@@ -66,20 +72,16 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
 
         public override int EndRead(IAsyncResult asyncResult)
         {
-            return ((Task<int>)asyncResult).Result;
-        }
-#endif
-
-        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
-        {
-            return _body.ReadAsync(new ArraySegment<byte>(buffer, offset, count), cancellationToken);
+            return ((Task<int>)asyncResult).GetAwaiter().GetResult();
         }
 
-        public Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken, object state)
+        private Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken, object state)
         {
+            ValidateState();
+
             var tcs = new TaskCompletionSource<int>(state);
             var task = _body.ReadAsync(new ArraySegment<byte>(buffer, offset, count), cancellationToken);
-            task.ContinueWith((task2, state2) =>
+            task.AsTask().ContinueWith((task2, state2) =>
             {
                 var tcs2 = (TaskCompletionSource<int>)state2;
                 if (task2.IsCanceled)
@@ -94,13 +96,77 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
                 {
                     tcs2.SetResult(task2.Result);
                 }
-            }, tcs);
+            }, tcs, cancellationToken);
             return tcs.Task;
+        }
+#endif
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            ValidateState();
+
+            // Needs .AsTask to match Stream's Async method return types
+            return _body.ReadAsync(new ArraySegment<byte>(buffer, offset, count), cancellationToken).AsTask();
         }
 
         public override void Write(byte[] buffer, int offset, int count)
         {
             throw new NotImplementedException();
+        }
+
+        public Stream StartAcceptingReads(MessageBody body)
+        {
+            // Only start if not aborted
+            if (_state == FrameStreamState.Closed)
+            {
+                _state = FrameStreamState.Open;
+                _body = body;
+            }
+            return this;
+        }
+
+        public void PauseAcceptingReads()
+        {
+            _state = FrameStreamState.Closed;
+        }
+
+        public void ResumeAcceptingReads()
+        {
+            if (_state == FrameStreamState.Closed)
+            {
+                _state = FrameStreamState.Open;
+            }
+        }
+
+        public void StopAcceptingReads()
+        {
+            // Can't use dispose (or close) as can be disposed too early by user code
+            // As exampled in EngineTests.ZeroContentLengthNotSetAutomaticallyForCertainStatusCodes
+            _state = FrameStreamState.Closed;
+            _body = null;
+        }
+
+        public void Abort()
+        {
+            // We don't want to throw an ODE until the app func actually completes.
+            // If the request is aborted, we throw an IOException instead.
+            if (_state != FrameStreamState.Closed)
+            {
+                _state = FrameStreamState.Aborted;
+            }
+        }
+
+        private void ValidateState()
+        {
+            switch (_state)
+            {
+                case FrameStreamState.Open:
+                    return;
+                case FrameStreamState.Closed:
+                    throw new ObjectDisposedException(nameof(FrameRequestStream));
+                case FrameStreamState.Aborted:
+                    throw new IOException("The request has been aborted.");
+            }
         }
     }
 }

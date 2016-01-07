@@ -22,26 +22,27 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
 
         public Task StartAsync(
             ServerAddress address,
-            KestrelThread thread,
-            Func<Frame, Task> application)
+            KestrelThread thread)
         {
             ServerAddress = address;
             Thread = thread;
-            Application = application;
 
-            var tcs = new TaskCompletionSource<int>();
-            Thread.Post(_ =>
+            var tcs = new TaskCompletionSource<int>(this);
+
+            Thread.Post(tcs2 =>
             {
                 try
                 {
-                    ListenSocket = CreateListenSocket();
-                    tcs.SetResult(0);
+                    var listener = ((Listener)tcs2.Task.AsyncState);
+                    listener.ListenSocket = listener.CreateListenSocket();
+                    tcs2.SetResult(0);
                 }
                 catch (Exception ex)
                 {
-                    tcs.SetException(ex);
+                    tcs2.SetException(ex);
                 }
-            }, null);
+            }, tcs);
+
             return tcs.Task;
         }
 
@@ -84,21 +85,29 @@ namespace Microsoft.AspNet.Server.Kestrel.Http
             // the exception that stopped the event loop will never be surfaced.
             if (Thread.FatalError == null && ListenSocket != null)
             {
-                var tcs = new TaskCompletionSource<int>();
+                var tcs = new TaskCompletionSource<int>(this);
                 Thread.Post(
-                    _ =>
+                    tcs2 =>
                     {
                         try
                         {
-                            ListenSocket.Dispose();
-                            tcs.SetResult(0);
+                            var socket = (Listener)tcs2.Task.AsyncState;
+                            socket.ListenSocket.Dispose();
+
+                            var writeReqPool = socket.WriteReqPool;
+                            while (writeReqPool.Count > 0)
+                            {
+                                writeReqPool.Dequeue().Dispose();
+                            }
+
+                            tcs2.SetResult(0);
                         }
                         catch (Exception ex)
                         {
-                            tcs.SetException(ex);
+                            tcs2.SetException(ex);
                         }
                     },
-                    null);
+                    tcs);
 
                 // REVIEW: Should we add a timeout here to be safe?
                 tcs.Task.Wait();

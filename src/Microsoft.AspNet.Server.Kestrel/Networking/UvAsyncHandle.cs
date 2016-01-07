@@ -8,7 +8,7 @@ namespace Microsoft.AspNet.Server.Kestrel.Networking
 {
     public class UvAsyncHandle : UvHandle
     {
-        private static Libuv.uv_async_cb _uv_async_cb = AsyncCb;
+        private static readonly Libuv.uv_async_cb _uv_async_cb = (handle) => AsyncCb(handle);
         private Action _callback;
 
         public UvAsyncHandle(IKestrelTrace logger) : base(logger)
@@ -24,12 +24,6 @@ namespace Microsoft.AspNet.Server.Kestrel.Networking
 
             _callback = callback;
             _uv.async_init(loop, this, _uv_async_cb);
-        }
-
-        public void DangerousClose()
-        {
-            Dispose();
-            ReleaseHandle();
         }
 
         public void Send()

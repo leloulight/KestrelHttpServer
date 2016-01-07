@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Linq;
 using Microsoft.AspNet.Server.Kestrel.Infrastructure;
+using System.Numerics;
 using Xunit;
 
 namespace Microsoft.AspNet.Server.KestrelTests
@@ -52,15 +53,21 @@ namespace Microsoft.AspNet.Server.KestrelTests
             int found = -1;
             if (searchFor.Length == 1)
             {
-                found = begin.Seek(searchFor[0]);
+                var search0 = new Vector<byte>((byte)searchFor[0]);
+                found = begin.Seek(ref search0);
             }
             else if (searchFor.Length == 2)
             {
-                found = begin.Seek(searchFor[0], searchFor[1]);
+                var search0 = new Vector<byte>((byte)searchFor[0]);
+                var search1 = new Vector<byte>((byte)searchFor[1]);
+                found = begin.Seek(ref search0, ref search1);
             }
             else if (searchFor.Length == 3)
             {
-                found = begin.Seek(searchFor[0], searchFor[1], searchFor[2]);
+                var search0 = new Vector<byte>((byte)searchFor[0]);
+                var search1 = new Vector<byte>((byte)searchFor[1]);
+                var search2 = new Vector<byte>((byte)searchFor[2]);
+                found = begin.Seek(ref search0, ref search1, ref search2);
             }
             else
             {
@@ -127,6 +134,161 @@ namespace Microsoft.AspNet.Server.KestrelTests
 
             // Can't put anything by the end
             Assert.False(head.Put(0xFF));
+        }
+
+        [Fact]
+        public void PeekLong()
+        {
+            // Arrange
+            var block = _pool.Lease();
+            var bytes = BitConverter.GetBytes(0x0102030405060708);
+            Buffer.BlockCopy(bytes, 0, block.Array, block.Start, bytes.Length);
+            block.End += bytes.Length;
+            var scan = block.GetIterator();
+            var originalIndex = scan.Index;
+
+            // Act
+            var result = scan.PeekLong();
+
+            // Assert
+            Assert.Equal(0x0102030405060708, result);
+            Assert.Equal(originalIndex, scan.Index);
+        }
+
+        [Theory]
+        [InlineData(1)]
+        [InlineData(2)]
+        [InlineData(3)]
+        [InlineData(4)]
+        [InlineData(5)]
+        [InlineData(6)]
+        [InlineData(7)]
+        public void PeekLongAtBlockBoundary(int blockBytes)
+        {
+            // Arrange
+            var nextBlockBytes = 8 - blockBytes;
+
+            var block = _pool.Lease();
+            block.End += blockBytes;
+
+            var nextBlock = _pool.Lease();
+            nextBlock.End += nextBlockBytes;
+
+            block.Next = nextBlock;
+
+            var bytes = BitConverter.GetBytes(0x0102030405060708);
+            Buffer.BlockCopy(bytes, 0, block.Array, block.Start, blockBytes);
+            Buffer.BlockCopy(bytes, blockBytes, nextBlock.Array, nextBlock.Start, nextBlockBytes);
+
+            var scan = block.GetIterator();
+            var originalIndex = scan.Index;
+
+            // Act
+            var result = scan.PeekLong();
+
+            // Assert
+            Assert.Equal(0x0102030405060708, result);
+            Assert.Equal(originalIndex, scan.Index);
+        }
+
+        [Theory]
+        [InlineData(1)]
+        [InlineData(2)]
+        [InlineData(3)]
+        [InlineData(4)]
+        [InlineData(5)]
+        [InlineData(6)]
+        [InlineData(7)]
+        [InlineData(8)]
+        [InlineData(9)]
+        public void SkipAtBlockBoundary(int blockBytes)
+        {
+            // Arrange
+            var nextBlockBytes = 10 - blockBytes;
+
+            var block = _pool.Lease();
+            block.End += blockBytes;
+
+            var nextBlock = _pool.Lease();
+            nextBlock.End += nextBlockBytes;
+
+            block.Next = nextBlock;
+
+            var bytes = new byte[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+            Buffer.BlockCopy(bytes, 0, block.Array, block.Start, blockBytes);
+            Buffer.BlockCopy(bytes, blockBytes, nextBlock.Array, nextBlock.Start, nextBlockBytes);
+
+            var scan = block.GetIterator();
+            var originalIndex = scan.Index;
+
+            // Act
+            scan.Skip(8);
+            var result = scan.Take();
+
+            // Assert
+            Assert.Equal(0x08, result);
+            Assert.NotEqual(originalIndex, scan.Index);
+        }
+
+        [Theory]
+        [InlineData("CONNECT / HTTP/1.1", ' ', true, MemoryPoolIterator2Extensions.HttpConnectMethod)]
+        [InlineData("DELETE / HTTP/1.1", ' ', true, MemoryPoolIterator2Extensions.HttpDeleteMethod)]
+        [InlineData("GET / HTTP/1.1", ' ', true, MemoryPoolIterator2Extensions.HttpGetMethod)]
+        [InlineData("HEAD / HTTP/1.1", ' ', true, MemoryPoolIterator2Extensions.HttpHeadMethod)]
+        [InlineData("PATCH / HTTP/1.1", ' ', true, MemoryPoolIterator2Extensions.HttpPatchMethod)]
+        [InlineData("POST / HTTP/1.1", ' ', true, MemoryPoolIterator2Extensions.HttpPostMethod)]
+        [InlineData("PUT / HTTP/1.1", ' ', true, MemoryPoolIterator2Extensions.HttpPutMethod)]
+        [InlineData("OPTIONS / HTTP/1.1", ' ', true, MemoryPoolIterator2Extensions.HttpOptionsMethod)]
+        [InlineData("TRACE / HTTP/1.1", ' ', true, MemoryPoolIterator2Extensions.HttpTraceMethod)]
+        [InlineData("GET/ HTTP/1.1", ' ', false, null)]
+        [InlineData("get / HTTP/1.1", ' ', false, null)]
+        [InlineData("GOT / HTTP/1.1", ' ', false, null)]
+        [InlineData("ABC / HTTP/1.1", ' ', false, null)]
+        [InlineData("PO / HTTP/1.1", ' ', false, null)]
+        [InlineData("PO ST / HTTP/1.1", ' ', false, null)]
+        [InlineData("short ", ' ', false, null)]
+        public void GetsKnownMethod(string input, char endChar, bool expectedResult, string expectedKnownString)
+        {
+            // Arrange
+            var block = _pool.Lease();
+            var chars = input.ToCharArray().Select(c => (byte)c).ToArray();
+            Buffer.BlockCopy(chars, 0, block.Array, block.Start, chars.Length);
+            block.End += chars.Length;
+            var scan = block.GetIterator();
+            var begin = scan;
+            string knownString;
+
+            // Act
+            var result = begin.GetKnownMethod(ref scan, out knownString);
+
+            // Assert
+            Assert.Equal(expectedResult, result);
+            Assert.Equal(expectedKnownString, knownString);
+        }
+
+        [Theory]
+        [InlineData("HTTP/1.0\r", '\r', true, MemoryPoolIterator2Extensions.Http10Version)]
+        [InlineData("HTTP/1.1\r", '\r', true, MemoryPoolIterator2Extensions.Http11Version)]
+        [InlineData("HTTP/3.0\r", '\r', false, null)]
+        [InlineData("http/1.0\r", '\r', false, null)]
+        [InlineData("http/1.1\r", '\r', false, null)]
+        [InlineData("short ", ' ', false, null)]
+        public void GetsKnownVersion(string input, char endChar, bool expectedResult, string expectedKnownString)
+        {
+            // Arrange
+            var block = _pool.Lease();
+            var chars = input.ToCharArray().Select(c => (byte)c).ToArray();
+            Buffer.BlockCopy(chars, 0, block.Array, block.Start, chars.Length);
+            block.End += chars.Length;
+            var scan = block.GetIterator();
+            var begin = scan;
+            string knownString;
+
+            // Act
+            var result = begin.GetKnownVersion(ref scan, out knownString);
+            // Assert
+            Assert.Equal(expectedResult, result);
+            Assert.Equal(expectedKnownString, knownString);
         }
     }
 }

@@ -1,14 +1,25 @@
 {
+<<<<<<< HEAD
   "version": "1.0.0-rc1-final",
   "description": "ASP.NET 5 cross platform development web server.",
+=======
+  "version": "1.0.0-*",
+  "description": "ASP.NET 5 cross platform web server.",
+>>>>>>> refs/remotes/aspnet/dev
   "repository": {
     "type": "git",
     "url": "git://github.com/aspnet/kestrelhttpserver"
   },
   "dependencies": {
+<<<<<<< HEAD
     "Microsoft.AspNet.Hosting": "1.0.0-rc1-final",
     "Microsoft.Extensions.Logging.Abstractions": "1.0.0-rc1-final",
     "System.Numerics.Vectors": "4.1.1-beta-23516",
+=======
+    "Microsoft.AspNet.Hosting": "1.0.0-*",
+    "Microsoft.Extensions.Logging.Abstractions": "1.0.0-*",
+    "System.Numerics.Vectors": "4.1.1-*",
+>>>>>>> refs/remotes/aspnet/dev
     "Microsoft.StandardsPolice": {
       "version": "1.0.0-*",
       "type": "build"
@@ -20,13 +31,15 @@
     "Microsoft.AspNet.Internal.libuv-Windows": {
       "version": "1.0.0-rc1-final",
       "type": "build"
-    }
+    },
+    "System.Threading.Tasks.Extensions": "4.0.0-*"
   },
   "frameworks": {
     "dnx451": {},
     "net451": {},
     "dnxcore50": {
       "dependencies": {
+<<<<<<< HEAD
         "System.Collections": "4.0.11-beta-23516",
         "System.Diagnostics.Debug": "4.0.11-beta-23516",
         "System.Diagnostics.TraceSource": "4.0.0-beta-23516",
@@ -43,10 +56,29 @@
         "System.Threading.Thread": "4.0.0-beta-23516",
         "System.Threading.ThreadPool": "4.0.10-beta-23516",
         "System.Threading.Timer": "4.0.1-beta-23516"
+=======
+        "System.Collections": "4.0.11-*",
+        "System.Diagnostics.Debug": "4.0.11-*",
+        "System.Diagnostics.TraceSource": "4.0.0-*",
+        "System.Diagnostics.Tracing": "4.0.21-*",
+        "System.Globalization": "4.0.11-*",
+        "System.IO": "4.0.11-*",
+        "System.Linq": "4.0.1-*",
+        "System.Net.Primitives": "4.0.11-*",
+        "System.Runtime.Extensions": "4.0.11-*",
+        "System.Runtime.InteropServices": "4.0.21-*",
+        "System.Text.Encoding": "4.0.11-*",
+        "System.Threading": "4.0.11-*",
+        "System.Threading.Tasks": "4.0.11-*",
+        "System.Threading.Thread": "4.0.0-*",
+        "System.Threading.ThreadPool": "4.0.10-*",
+        "System.Threading.Timer": "4.0.1-*"
+>>>>>>> refs/remotes/aspnet/dev
       }
     },
     "dotnet5.4": {
       "dependencies": {
+<<<<<<< HEAD
         "System.Collections": "4.0.11-beta-23516",
         "System.Diagnostics.Debug": "4.0.11-beta-23516",
         "System.Diagnostics.TraceSource": "4.0.0-beta-23516",
@@ -63,6 +95,24 @@
         "System.Threading.Thread": "4.0.0-beta-23516",
         "System.Threading.ThreadPool": "4.0.10-beta-23516",
         "System.Threading.Timer": "4.0.1-beta-23516"
+=======
+        "System.Collections": "4.0.11-*",
+        "System.Diagnostics.Debug": "4.0.11-*",
+        "System.Diagnostics.TraceSource": "4.0.0-*",
+        "System.Diagnostics.Tracing": "4.0.21-*",
+        "System.Globalization": "4.0.11-*",
+        "System.IO": "4.0.11-*",
+        "System.Linq": "4.0.1-*",
+        "System.Net.Primitives": "4.0.11-*",
+        "System.Runtime.Extensions": "4.0.11-*",
+        "System.Runtime.InteropServices": "4.0.21-*",
+        "System.Text.Encoding": "4.0.11-*",
+        "System.Threading": "4.0.11-*",
+        "System.Threading.Tasks": "4.0.11-*",
+        "System.Threading.Thread": "4.0.0-*",
+        "System.Threading.ThreadPool": "4.0.10-*",
+        "System.Threading.Timer": "4.0.1-*"
+>>>>>>> refs/remotes/aspnet/dev
       }
     }
   },
@@ -84,7 +134,7 @@
     "/": "../../content/thirdpartynotices.txt",
     "runtimes/win7-x64/native/": "runtimes/win7-x64/native/*",
     "runtimes/win7-x86/native/": "runtimes/win7-x86/native/*",
-    "runtimes/win10-arm/native/": "runtimes/win10-arm/native/*",
+    "runtimes/win7-arm/native/": "runtimes/win7-arm/native/*",
     "runtimes/osx/native/": "runtimes/osx/native/*"
   }
 }
